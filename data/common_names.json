@@ -17,11 +17,10 @@
     "Noah",
     "Charlotte"
   ],
-  "description": "Common first names for rotational greeting stems (used in 'Hello {name}').",
   "metadata": {
-    "version": "v1.0-test",
+    "version": "v5.0-sonic3",
     "locale": "en-US",
     "category": "first_names",
-    "note": "This sample set is designed for test batch caching and template validation."
+    "note": "Dataset aligned to Sonic-3 contract. Items are raw transcript values."
   }
 }

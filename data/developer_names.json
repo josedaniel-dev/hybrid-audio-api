@@ -3,23 +3,22 @@
     "Hilton",
     "Marriott",
     "Wyndham",
-    "Hyatt",
-    "Westgate",
     "Holiday Inn",
-    "Bluegreen Vacations",
     "Diamond Resorts",
-    "Vistana",
+    "Westgate",
+    "Bluegreen Vacations",
+    "Ritz Carlton",
+    "Four Seasons",
     "Sheraton",
-    "Radisson",
-    "Club Wyndham",
-    "Fairfield",
-    "Four Seasons"
+    "Hyatt",
+    "Accor",
+    "Best Western",
+    "Radisson"
   ],
-  "description": "Developer or brand names for rotational stems (used in '{developer} timeshare').",
   "metadata": {
-    "version": "v1.0-test",
-    "industry": "hospitality",
-    "category": "brand_names",
-    "note": "For validation of hybrid templates and voice consistency across brand stems."
+    "version": "v5.0-sonic3",
+    "locale": "en-US",
+    "category": "timeshare_brands",
+    "note": "Dataset aligned to Sonic-3 contract. Items are raw transcript values."
   }
 }

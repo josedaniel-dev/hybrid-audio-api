@@ -2,223 +2,269 @@
 """
 Batch Stem Generator — pre-generates stems from lists or template contracts.
 
-v3.6 NDF — Rotational Mode (Dynamic Stem Provisioning)
-• Adds rotational batch mode for dynamic stems ("Hello {name}", "{developer} timeshare")
-• Integrates with data/common_names.json and data/developer_names.json
-• Skips immutable stems (intro, followup, closing)
-• Reuses Sonic-3 (tts/bytes) endpoint and cache safety
-• Retains v3.5 template, CSV, JSON, and inline batch modes
+v5.1 NDF — Sonic-3 Contract + Canonical Labels
+
+Changes vs v4.2:
+    • Uses canonical labels:
+          stem.name.<name_slug>
+          stem.developer.<dev_slug>
+      instead of stem_name_* / stem_brand_*.
+    • Rotational batch generation now populates the same cache keys used
+      by routes/generate.py and routes/rotation.py.
+    • Still never sends stem_id as text (uses _clean_text_from_stem for legacy).
+    • Respects cartesia_generate() Sonic-3 contract and cache_manager v5.0.
+    • Rotational entries marked with rotational=True + dataset_origin.
 """
 
 import sys
-import csv
 import json
 import time
+import datetime
 import concurrent.futures
 from pathlib import Path
-from typing import Iterable, Dict, Any
+from typing import Iterable, Dict, Any, List, Optional, Tuple
 
-from assemble_message import cartesia_generate, load_template, build_segments_from_template
-from config import DEBUG, MODEL_ID, VOICE_ID, SAMPLE_RATE, CARTESIA_API_URL, BASE_DIR
+from assemble_message import (
+    cartesia_generate,
+    load_template,
+    build_segments_from_template,
+    _clean_text_from_stem,
+)
+
+from config import (
+    DEBUG,
+    MODEL_ID,
+    VOICE_ID,
+    BASE_DIR,
+    OUTPUT_DIR,
+    CARTESIA_API_URL,
+    stem_label_name,
+    stem_label_developer,
+)
+
+# -------------------------------------------------
+# Cache / rotational metadata
+# -------------------------------------------------
+try:
+    from cache_manager import (
+        find_or_generate_stem,
+        register_rotational_stem,
+        stem_key,
+    )
+    CACHE_OK = True
+except Exception:
+    CACHE_OK = False
+
+    def find_or_generate_stem(text, voice_id=VOICE_ID, model_id=MODEL_ID, template=None):
+        stem = f"stem_generic_{abs(hash((text, voice_id, model_id))) % (10**10)}"
+        return cartesia_generate(text, stem, voice_id=voice_id, template=template)
+
+    def register_rotational_stem(*a, **k):
+        return None
+
+    def stem_key(text, voice_id=VOICE_ID, model_id=MODEL_ID):
+        return f"stem_generic_{abs(hash((text, voice_id, model_id))) % (10**10)}"
 
 
-# ────────────────────────────────────────────────
-# ⚙️ Core Batch Function
-# ────────────────────────────────────────────────
+# -------------------------------------------------
+# Helpers
+# -------------------------------------------------
+def _slugify(text: str) -> str:
+    return (
+        text.strip()
+        .lower()
+        .replace(" ", "_")
+        .replace("/", "_")
+        .replace("\\", "_")
+    )
+
+
+def _ts_compact() -> str:
+    return datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
+
+
+def _make_label(prefix: str, item: str) -> str:
+    """
+    v5.1 — Canonical label resolver:
+        • prefix in {"stem_name", "name"}      → stem.name.<slug>
+        • prefix in {"stem_brand","developer"} → stem.developer.<slug>
+        • else                                 → <prefix>.<slug>
+    """
+    if prefix in ("stem_name", "name"):
+        return stem_label_name(item)
+    if prefix in ("stem_brand", "developer", "dev"):
+        return stem_label_developer(item)
+    return f"{prefix}.{_slugify(item)}"
+
+
+# -------------------------------------------------
+# CORE GENERATION (v5.1)
+# -------------------------------------------------
 def generate_from_list(
     items: Iterable[str],
     prefix: str,
     voice_overrides: Dict[str, Any] = None,
     max_workers: int = 4,
     retries: int = 2,
+    use_cache_key: bool = False,
+    rotational: bool = False,
+    dataset_origin: Optional[str] = None,
 ) -> None:
     """
-    Generate stems concurrently from a list of text items.
-    Applies optional voice_config (speed, tone, volume) if provided.
-    """
-    items = list(items)
-    total = len(items)
-    print(f"🚀 Starting batch generation for prefix '{prefix}' ({total} items)")
-    print(
-        f"🧠 API: {'sonic-3' if 'tts/bytes' in CARTESIA_API_URL else 'legacy'} "
-        f"| voice: {VOICE_ID} | model: {MODEL_ID} | rate: {SAMPLE_RATE} Hz\n"
-    )
+    Batch generator for arbitrary lists.
 
-    def process_item(item: str):
-        """Worker for generating a single stem with retry logic."""
-        name = item.strip().lower().replace(" ", "_")
-        stem_name = f"{prefix}_{name}"
+    Notes:
+      • v5.1 rotational mode ignores use_cache_key and always writes canonical
+        labels (stem.name.* / stem.developer.*) so routes/rotation + generate
+        can reuse stems from the cache.
+    """
+
+    raw_items = [i.strip() for i in items if i and i.strip()]
+    total = len(raw_items)
+
+    if not total:
+        print("⚠️ Empty dataset for generate_from_list.")
+        return
+
+    print(f"🚀 Batch prefix '{prefix}' — {total} stems")
+    print(f"API={'sonic-3' if 'tts/bytes' in CARTESIA_API_URL else 'legacy'}")
+    print(f"voice={VOICE_ID} | model={MODEL_ID}")
+
+    def worker(item: str):
+        # v5.1: canonical label (no more stem_name_* / stem_brand_*)
+        stem_name = _make_label(prefix, item)
+
+        # Legacy safety: if item is itself a stem id, reconstruct natural text
+        if item.lower().startswith("stem_"):
+            safe_text = _clean_text_from_stem(item)
+        else:
+            safe_text = item.strip()
+
         attempt = 0
+        template = None  # no template for bulk (voice_config handled by cartesia_generate if needed)
 
         while attempt <= retries:
             try:
-                stem_path = cartesia_generate(item, stem_name, voice_id=VOICE_ID)
-                return (item, stem_path, attempt)
+                # v5.1: In rotational mode we avoid cache_key indirection and
+                # always generate under the canonical label used by routes.
+                if use_cache_key and CACHE_OK and not rotational:
+                    key = stem_key(item, VOICE_ID, MODEL_ID)
+                    path = find_or_generate_stem(
+                        safe_text,
+                        voice_id=VOICE_ID,
+                        model_id=MODEL_ID,
+                        template=template,
+                    )
+                    # For non-rotational cache_key usage we don't override label.
+                    return item, path, attempt, stem_name
+
+                # Normal Sonic-3 generation under canonical label
+                path = cartesia_generate(
+                    safe_text,
+                    stem_name,
+                    voice_id=VOICE_ID,
+                    template=template,
+                )
+
+                # v5.1: mark as rotational in cache when requested
+                if rotational and CACHE_OK:
+                    register_rotational_stem(
+                        name=stem_name,
+                        text=safe_text,
+                        path=path,
+                        dataset_origin=dataset_origin or f"rotations/{prefix}",
+                        voice_id=VOICE_ID,
+                        model_id=MODEL_ID,
+                    )
+
+                return item, path, attempt, stem_name
+
             except Exception as e:
                 attempt += 1
                 if attempt > retries:
-                    print(f"❌  {stem_name} failed after {attempt} attempts → {e}")
-                    return (item, None, attempt)
-                print(f"⚠️  Retry {attempt}/{retries} → {stem_name}")
+                    print(f"❌ {stem_name} failed → {e}")
+                    return item, None, attempt, stem_name
+
+                print(f"⚠️ Retry {attempt}/{retries} — {stem_name}")
                 time.sleep(1)
 
     completed = 0
-    start = time.time()
+    t0 = time.time()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(process_item, item): item for item in items}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as exe:
+        futures = {exe.submit(worker, item): item for item in raw_items}
 
-        for future in concurrent.futures.as_completed(futures):
-            item = futures[future]
-            _, path, attempt = future.result()
+        for fut in concurrent.futures.as_completed(futures):
+            item = futures[fut]
+            _, path, attempt, label = fut.result()
             completed += 1
-            pct = (completed / total) * 100
 
-            if path:
-                if DEBUG:
-                    print(f"✅ [{completed}/{total}] {prefix}_{item.lower()} (try {attempt+1})")
-            else:
-                print(f"❌ [{completed}/{total}] {item} failed permanently")
+            if path and DEBUG:
+                print(f"  ✔ {label} (try {attempt+1})")
 
-            if completed % 5 == 0 or completed == total:
-                elapsed = round(time.time() - start, 1)
-                print(f"⏱️  Progress: {completed}/{total} ({pct:.1f} %) in {elapsed}s")
-
-    print(f"\n🎯 Batch completed for '{prefix}'. {completed}/{total} processed.")
-    print(f"⏳ Total time: {round(time.time() - start, 2)} s\n")
+    print(f"🎯 Batch complete: {completed}/{total}")
+    print(f"⏳ Time: {round(time.time() - t0, 2)}s\n")
 
 
-# ────────────────────────────────────────────────
-# 📦 Template-Driven Batch Mode
-# ────────────────────────────────────────────────
-def generate_from_template(
-    template_path: str,
-    first_name: str = "John",
-    developer: str = "Hilton",
-    max_workers: int = 4,
-) -> None:
-    """Generate all stems defined in a phrasing/timing template."""
+# -------------------------------------------------
+# TEMPLATE MODE
+# -------------------------------------------------
+def generate_from_template(template_path: str, first_name="John", developer="Hilton", max_workers=4):
     tpl = load_template(template_path)
-    voice_cfg = tpl.get("voice_config", {})
-    segs = build_segments_from_template(tpl, first_name, developer)
-    texts = [t for _, t in segs]
+    segments = build_segments_from_template(tpl, first_name, developer)
+    texts = [t for _, t in segments]
 
-    print(
-        f"📜 Template: {Path(template_path).name} | Segments: {len(texts)} "
-        f"| Voice config: {voice_cfg}"
+    print(f"📜 Template: {Path(template_path).name} | segments={len(texts)}")
+    generate_from_list(
+        texts,
+        prefix="tpl",
+        voice_overrides=tpl.get("voice_config", {}),
+        max_workers=max_workers,
     )
-    generate_from_list(texts, prefix="tpl", voice_overrides=voice_cfg, max_workers=max_workers)
 
 
-# ────────────────────────────────────────────────
-# 🔁 Rotational Mode — Dynamic Stem Provisioning
-# ────────────────────────────────────────────────
-def generate_rotational_stems(names_path: Path, developers_path: Path, max_workers: int = 6) -> None:
+# -------------------------------------------------
+# ROTATIONAL MODE (v5.1)
+# -------------------------------------------------
+def generate_rotational_stems(names_path: Path, devs_path: Path, max_workers=6):
     """
-    Generate dynamic stems for all name and developer entries.
-    - "Hello {name}"          → stem_name_<name>.wav
-    - "{developer} timeshare" → stem_brand_<developer>.wav
+    v5.1 rotational batch generator.
+
+    Ensures:
+      • Names stored as stem.name.<slug>
+      • Developers stored as stem.developer.<slug>
+      • Cache entries are compatible with rotation/generate routes.
     """
-    print(f"\n🔁 Rotational Batch Mode (names + developers)")
-    start = time.time()
+    print("\n🔁 Rotational Mode")
 
-    # Load datasets
-    try:
-        with open(names_path, "r", encoding="utf-8") as f:
-            names = json.load(f).get("items", [])
-        with open(developers_path, "r", encoding="utf-8") as f:
-            devs = json.load(f).get("items", [])
-    except Exception as e:
-        print(f"❌ Failed to load datasets: {e}")
-        return
+    from rotational_engine import verify_dataset_integrity, summarize_rotational_cache
 
-    print(f"📘 Names: {len(names)} | Developers: {len(devs)}")
+    verify_dataset_integrity(names_path, devs_path)
 
-    # Build phrase lists
-    name_phrases = [f"Hello {n}" for n in names]
-    dev_phrases = [f"{d} timeshare" for d in devs]
+    names = json.loads(names_path.read_text()).get("items", [])
+    devs = json.loads(devs_path.read_text()).get("items", [])
 
-    # Generate both types concurrently
-    generate_from_list(name_phrases, prefix="stem_name", max_workers=max_workers)
-    generate_from_list(dev_phrases, prefix="stem_brand", max_workers=max_workers)
+    print(f"Names={len(names)} | Developers={len(devs)}")
 
-    elapsed = round(time.time() - start, 2)
-    print(f"\n✅ Rotational batch complete in {elapsed}s")
-    print(f"🧠 Total stems targeted: {len(name_phrases) + len(dev_phrases)}")
+    # Names → stem.name.*
+    generate_from_list(
+        names,
+        prefix="stem_name",
+        use_cache_key=False,  # v5.1: explicit canonical labels
+        rotational=True,
+        dataset_origin="rotations/names",
+        max_workers=max_workers,
+    )
 
+    # Developers → stem.developer.*
+    generate_from_list(
+        devs,
+        prefix="stem_brand",  # legacy prefix, label resolver maps to stem.developer.*
+        use_cache_key=False,
+        rotational=True,
+        dataset_origin="rotations/developers",
+        max_workers=max_workers,
+    )
 
-# ────────────────────────────────────────────────
-# 📥 Input Utilities
-# ────────────────────────────────────────────────
-def load_items_from_csv(csv_path: str, column: str) -> list[str]:
-    """Load items from a CSV column."""
-    with open(csv_path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        items = [row[column] for row in reader if row.get(column)]
-    print(f"📄 Loaded {len(items)} items from CSV: {csv_path}")
-    return items
-
-
-def load_items_from_json(json_path: str, key: str = "items") -> list[str]:
-    """Load items from a JSON file."""
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-        items = data.get(key, [])
-    print(f"📘 Loaded {len(items)} items from JSON: {json_path}")
-    return items
-
-
-# ────────────────────────────────────────────────
-# 🧪 Command-Line Execution
-# ────────────────────────────────────────────────
-if __name__ == "__main__":
-    """
-    CLI Examples:
-      python batch_generate_stems.py csv data/names.csv name name
-      python batch_generate_stems.py json data/devs.json items dev
-      python batch_generate_stems.py inline "John,Sarah" name
-      python batch_generate_stems.py template templates/double_anchor_hybrid_v3_5.json
-      python batch_generate_stems.py rotations data/common_names.json data/developer_names.json
-    """
-    if len(sys.argv) < 2:
-        print("Usage:")
-        print("  python batch_generate_stems.py [csv|json|inline|template|rotations] <args>")
-        sys.exit(1)
-
-    mode = sys.argv[1].lower()
-
-    try:
-        if mode == "csv":
-            path, column, prefix = sys.argv[2:5]
-            items = load_items_from_csv(path, column)
-            generate_from_list(items, prefix)
-
-        elif mode == "json":
-            path, key, prefix = sys.argv[2:5]
-            items = load_items_from_json(path, key)
-            generate_from_list(items, prefix)
-
-        elif mode == "inline":
-            raw_items, prefix = sys.argv[2:4]
-            items = [i.strip() for i in raw_items.split(",") if i.strip()]
-            generate_from_list(items, prefix)
-
-        elif mode == "template":
-            template_path = sys.argv[2]
-            first_name = sys.argv[3] if len(sys.argv) > 3 else "John"
-            developer = sys.argv[4] if len(sys.argv) > 4 else "Hilton"
-            generate_from_template(template_path, first_name, developer)
-
-        elif mode == "rotations":
-            names_path = Path(sys.argv[2]) if len(sys.argv) > 2 else BASE_DIR / "data/common_names.json"
-            devs_path = Path(sys.argv[3]) if len(sys.argv) > 3 else BASE_DIR / "data/developer_names.json"
-            generate_rotational_stems(names_path, devs_path)
-
-        else:
-            print(f"❌ Unsupported mode: {mode}")
-            sys.exit(1)
-
-    except Exception as e:
-        print(f"❌ Execution failed: {e}")
-        if DEBUG:
-            raise
+    summarize_rotational_cache(names, devs)
+    print("✅ Rotational stems complete.\n")
