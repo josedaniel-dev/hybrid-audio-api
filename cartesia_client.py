@@ -36,11 +36,15 @@ from errors.sonic3_errors import (
 )
 
 
+# -------------------------------------------------
+# Error hierarchy (clean & unified)
+# -------------------------------------------------
+
 class Sonic3ClientError(Sonic3Error):
     """Base error for Cartesia client failures."""
 
 
-class InvalidPayloadError(CoreInvalidPayloadError):  # type: ignore[override]
+class InvalidPayloadError(CoreInvalidPayloadError):
     """Raised when the payload does not satisfy the Sonic-3 contract."""
 
 
@@ -52,22 +56,17 @@ class RateLimitError(Sonic3ClientError):
     """Raised when Cartesia signals rate limiting."""
 
 
+# -------------------------------------------------
+# SSML detection
+# -------------------------------------------------
+
 _SSML_PATTERN = re.compile(r"<[^>]+>")
 
 
 def detect_voice_compatibility(voice_id: str) -> bool:
-    """Return True when the provided voice_id is non-empty and well-formed.
-
-    The Sonic-3 contract requires ``voice.mode == "id"``. This helper performs
-    a lightweight sanity check that the id looks like a UUID or at minimum a
-    non-blank token without whitespace. It deliberately avoids strict UUID
-    validation to remain forward-compatible with Cartesia voice identifiers.
-    """
-
+    """Return True when the provided voice_id is non-empty and well-formed."""
     if not isinstance(voice_id, str) or not voice_id.strip():
         return False
-
-    # Basic UUID-ish structure (hex and dashes) without enforcing exact length
     return bool(re.fullmatch(r"[A-Za-z0-9_-]{6,}(-[A-Za-z0-9_-]{4,})*", voice_id.strip()))
 
 
@@ -76,20 +75,11 @@ def _assert_no_ssml(text: str) -> None:
         raise InvalidPayloadError("SSML is not allowed in Sonic-3 transcripts.")
 
 
+# -------------------------------------------------
+# Payload construction + validation
+# -------------------------------------------------
+
 def build_payload(transcript: str, voice_id: str, speed: float, volume: float) -> Dict[str, Any]:
-    """Construct a Sonic-3 compliant payload.
-
-    Args:
-        transcript: Plain text transcript (no SSML).
-        voice_id: Voice identifier compatible with Sonic-3.
-        speed: Playback speed multiplier.
-        volume: Output volume multiplier.
-
-    Raises:
-        InvalidPayloadError: If SSML or invalid parameters are detected.
-        VoiceIncompatibleError: When the voice id does not conform to contract.
-    """
-
     _assert_no_ssml(transcript)
 
     if not detect_voice_compatibility(voice_id):
@@ -115,8 +105,6 @@ def build_payload(transcript: str, voice_id: str, speed: float, volume: float) -
 
 
 def validate_payload(payload: Dict[str, Any]) -> None:
-    """Validate that a payload complies with the Sonic-3 contract."""
-
     transcript = payload.get("transcript")
     if not isinstance(transcript, str) or not transcript.strip():
         raise InvalidPayloadError("transcript must be a non-empty string")
@@ -143,9 +131,11 @@ def validate_payload(payload: Dict[str, Any]) -> None:
         raise InvalidPayloadError(f"model_id must be '{MODEL_ID}'")
 
 
-def parse_sonic3_errors(response_json: Dict[str, Any]) -> None:
-    """Inspect a Cartesia error payload and raise specific exceptions."""
+# -------------------------------------------------
+# Error parsing
+# -------------------------------------------------
 
+def parse_sonic3_errors(response_json: Dict[str, Any]) -> None:
     if not response_json:
         return
 
@@ -159,15 +149,11 @@ def parse_sonic3_errors(response_json: Dict[str, Any]) -> None:
         raise Sonic3ClientError(message)
 
 
+# -------------------------------------------------
+# Request dispatch
+# -------------------------------------------------
+
 def send_request(payload: Dict[str, Any]) -> bytes:
-    """Send the Sonic-3 request and return WAV bytes.
-
-    Raises:
-        InvalidPayloadError: when payload is malformed.
-        RateLimitError: when Cartesia signals throttling.
-        Sonic3ClientError: for other API errors.
-    """
-
     validate_payload(payload)
 
     headers = {
@@ -200,9 +186,11 @@ def send_request(payload: Dict[str, Any]) -> bytes:
     return response.content
 
 
-def log_sonic3_request(payload: Dict[str, Any], response_time_ms: float) -> None:
-    """Lightweight logging hook for Sonic-3 requests."""
+# -------------------------------------------------
+# Logging + version extraction
+# -------------------------------------------------
 
+def log_sonic3_request(payload: Dict[str, Any], response_time_ms: float) -> None:
     transcript_preview = (payload.get("transcript") or "").strip().split()
     preview = " ".join(transcript_preview[:6])
     print(
@@ -212,13 +200,15 @@ def log_sonic3_request(payload: Dict[str, Any], response_time_ms: float) -> None
 
 
 def extract_cartesia_version(response_headers: Dict[str, Any]) -> str | None:
-    """Extract Cartesia version header if present."""
-
     for key in ("x-cartesia-version", "X-Cartesia-Version"):
         if key in response_headers:
             return str(response_headers[key])
     return None
 
+
+# -------------------------------------------------
+# Response WAV validation
+# -------------------------------------------------
 
 def _validate_wav_bytes(payload: bytes) -> None:
     try:
@@ -237,9 +227,11 @@ def _validate_wav_bytes(payload: bytes) -> None:
         raise OutputValidationError(f"Expected sample_rate {SONIC3_SAMPLE_RATE}; got {sample_rate}")
 
 
-def safe_generate_wav(transcript: str, voice_id: str, speed: float = 1.0, volume: float = 1.0) -> bytes:
-    """End-to-end Sonic-3 generation with validation and logging."""
+# -------------------------------------------------
+# Safe full cycle (build → request → validate → return)
+# -------------------------------------------------
 
+def safe_generate_wav(transcript: str, voice_id: str, speed: float = 1.0, volume: float = 1.0) -> bytes:
     payload = build_payload(transcript, voice_id, speed, volume)
     start = time.perf_counter()
     wav_bytes = send_request(payload)
