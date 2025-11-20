@@ -14,6 +14,13 @@ from config import (
 )
 
 
+def _norm(value: Optional[str]) -> str:
+    """Normalize contract fields to deterministic lowercase strings."""
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
 def compute_contract_signature(
     model_id: Optional[str] = None,
     container: Optional[str] = None,
@@ -24,12 +31,13 @@ def compute_contract_signature(
     """Compute a deterministic SHA256 signature of the Sonic-3 contract."""
 
     parts = [
-        model_id or MODEL_ID,
-        container or SONIC3_CONTAINER,
-        encoding or SONIC3_ENCODING,
-        str(sample_rate or SONIC3_SAMPLE_RATE),
-        cartesia_version or CARTESIA_VERSION,
+        _norm(model_id or MODEL_ID),
+        _norm(container or SONIC3_CONTAINER),
+        _norm(encoding or SONIC3_ENCODING),
+        _norm(sample_rate or SONIC3_SAMPLE_RATE),
+        _norm(cartesia_version or CARTESIA_VERSION),
     ]
+
     payload = "|".join(parts)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
