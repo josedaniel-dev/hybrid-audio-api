@@ -16,7 +16,7 @@ _SSML_RE = re.compile(r"<[^>]+>")
 
 
 # -------------------------------------------------------------------------
-# Base Validators (do not break compatibility)
+# Base Validators (Compatibility Preserved)
 # -------------------------------------------------------------------------
 
 def validate_template_structure(template: Dict[str, Any]) -> None:
@@ -30,6 +30,7 @@ def validate_template_structure(template: Dict[str, Any]) -> None:
 
 def validate_segments(template: Dict[str, Any]) -> None:
     seen: Set[str] = set()
+
     for seg in template.get("segments", []):
         seg_id = seg.get("id")
         text = seg.get("text")
@@ -41,12 +42,10 @@ def validate_segments(template: Dict[str, Any]) -> None:
             raise TemplateContractError(f"Duplicate segment id: {seg_id}")
         seen.add(seg_id)
 
-        if not text or not isinstance(text, str):
-            raise TemplateContractError(f"Segment {seg_id} missing text")
-        if len(text.strip()) == 0:
-            raise TemplateContractError(f"Segment {seg_id} has empty text")
+        if not isinstance(text, str) or not text.strip():
+            raise TemplateContractError(f"Segment {seg_id} missing or empty text")
 
-        # Numeric validation
+        # Validate numeric fields
         for field in ("gap_ms", "crossfade_ms", "break_ms", "estimated_duration_ms"):
             value = seg.get(field, 0)
             if value is None:
@@ -62,25 +61,23 @@ def validate_segments(template: Dict[str, Any]) -> None:
 def validate_placeholders(template: Dict[str, Any]) -> None:
     declared = set(template.get("placeholders", []))
     found: Set[str] = set()
+
     for seg in template.get("segments", []):
         text = seg.get("text") or ""
         found.update(_PLACEHOLDER_RE.findall(text))
 
     if declared and not declared.issuperset(found):
         missing = found - declared
-        if missing:
-            raise TemplateContractError(
-                f"Placeholders not declared: {', '.join(sorted(missing))}"
-            )
+        raise TemplateContractError(
+            f"Placeholders not declared: {', '.join(sorted(missing))}"
+        )
 
 
 def validate_no_ssml(template: Dict[str, Any]) -> None:
     for seg in template.get("segments", []):
         text = seg.get("text") or ""
         if _SSML_RE.search(text):
-            raise TemplateContractError(
-                f"SSML detected in segment {seg.get('id')}"
-            )
+            raise TemplateContractError(f"SSML detected in segment {seg.get('id')}")
 
 
 def validate_timing(template: Dict[str, Any]) -> None:
@@ -106,7 +103,6 @@ def validate_timing(template: Dict[str, Any]) -> None:
             if numeric < 0:
                 raise TimingMapError(f"{field} for {src}->{dst} cannot be negative")
 
-    # Validate break_ms numeric and >= 0
     for seg in template.get("segments", []):
         if seg.get("break_ms") is not None and float(seg.get("break_ms", 0)) < 0:
             raise TimingMapError(f"break_ms for {seg.get('id')} cannot be negative")
@@ -117,9 +113,7 @@ def validate_timing(template: Dict[str, Any]) -> None:
 # -------------------------------------------------------------------------
 
 def _build_graph(template: Dict[str, Any]) -> Dict[str, Set[str]]:
-    graph: Dict[str, Set[str]] = {
-        seg.get("id"): set() for seg in template.get("segments", [])
-    }
+    graph: Dict[str, Set[str]] = {seg.get("id"): set() for seg in template.get("segments", [])}
     for edge in template.get("timing_map", []):
         src = edge.get("from")
         dst = edge.get("to")
@@ -148,23 +142,25 @@ def _detect_cycle(graph: Dict[str, Set[str]]) -> bool:
         stack.remove(node)
         return False
 
-    return any(dfs(node) for node in graph)
+    return any(dfs(n) for n in graph)
 
 
 def validate_template_full(template: Dict[str, Any]) -> None:
-    """Extended validation layer. Does not replace the base validator."""
+    """Extended validation layer that supplements, not replaces, the base validator."""
 
+    # Base validation
     validate_template_structure(template)
     validate_segments(template)
     validate_placeholders(template)
     validate_no_ssml(template)
     validate_timing(template)
 
+    # Build graph
     graph = _build_graph(template)
     segment_ids = set(graph.keys())
 
-    # Detect inbound degrees
-    inbound: Dict[str, int] = {node: 0 for node in segment_ids}
+    # Compute inbound counts
+    inbound: Dict[str, int] = {n: 0 for n in segment_ids}
     for src, targets in graph.items():
         for dst in targets:
             if dst in inbound:
@@ -208,7 +204,7 @@ def validate_template_full(template: Dict[str, Any]) -> None:
             f"Declared placeholders never used: {', '.join(sorted(missing_declared))}"
         )
 
-    # Exclusivity break_ms vs crossfade_ms
+    # Exclusivity rule (break_ms vs crossfade_ms)
     for seg in template.get("segments", []):
         break_ms = float(seg.get("break_ms", 0) or 0)
         crossfade_ms = float(seg.get("crossfade_ms", 0) or 0)
@@ -218,11 +214,10 @@ def validate_template_full(template: Dict[str, Any]) -> None:
                 f"break_ms and crossfade_ms are mutually exclusive for segment {seg.get('id')}"
             )
 
-        # Estimated duration sanity check (warn only)
-        text = seg.get("text") or ""
+        # Heuristic sanity: warn only
         if seg.get("estimated_duration_ms"):
             est = float(seg.get("estimated_duration_ms") or 0)
-            min_expected = len(text.split()) * 50  # heuristic
+            min_expected = len((seg.get("text") or "").split()) * 50
             if est < min_expected:
                 print(
                     f"[WARN] estimated_duration_ms for segment {seg.get('id')} "
