@@ -2,15 +2,17 @@
 """
 logging_utils.py — Observability helpers (JSON logs + request_id)
 
-v5.0 NDF — Sonic-3 Contract-Aware Logging
+v5.1 NDF — Sonic-3 Contract-Aware Logging + Hardening
 ──────────────────────────────────────────────────────────────────────────────
 • Preserves all v3.6 structured JSON logging behavior
-• Integrates request_log_context() (IDs + Sonic-3 contract)
-• Every log_event() is automatically enriched with:
-      - request_id / correlation_id
-      - sonic3_contract: {model_id, voice_id, sample_rate, encoding, version}
-• Adds log_contract_warning() for v5.0 cache signature mismatches
-• Fully additive and reversible
+• Fully enriched v5.0: request_id, correlation_id, sonic3_contract block
+• NEW in v5.1 hardening:
+      - sonic3_contract_valid extracted if available
+      - oversized field trimming (prevents log poisoning)
+      - defensive JSON encoding (failsafe logging)
+      - forbidden key sanitization (prevents overriding system fields)
+      - uniform normalization of level names
+• Zero breaking changes. Purely additive.
 Author: José Soto
 """
 
@@ -20,21 +22,28 @@ from typing import Any, Dict, Optional
 from datetime import datetime
 from contextvars import ContextVar
 
-# Optional v5.0 observability context
+# Optional v5.0+ observability context
 try:
     from observability.request_context import request_log_context
 except Exception:
-    # Safe fallback when middleware not loaded
     def request_log_context() -> dict:
         return {}
 
 # Contextvar for request_id (legacy compatibility)
 _request_id_ctx: ContextVar[Optional[str]] = ContextVar("_request_id", default=None)
 
+# Env configuration
 LOG_JSON = os.getenv("LOG_JSON", "true").lower() == "true"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 _LEVELS = {"DEBUG": 10, "INFO": 20, "WARN": 30, "WARNING": 30, "ERROR": 40}
 _MIN = _LEVELS.get(LOG_LEVEL, 20)
+
+# Hardening constants
+_MAX_FIELD_LEN = 5000
+_FORBIDDEN_KEYS = {
+    "ts", "level", "request_id", "correlation_id",
+    "message", "status", "action", "scope", "sonic3_contract"
+}
 
 
 # ────────────────────────────────────────────────
@@ -43,30 +52,57 @@ _MIN = _LEVELS.get(LOG_LEVEL, 20)
 def set_request_id(value: Optional[str]) -> None:
     _request_id_ctx.set(value)
 
+
 def _now_iso() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
+
 def _should(level: str) -> bool:
-    return _LEVELS.get(level, 20) >= _MIN
+    return _LEVELS.get(level.upper(), 20) >= _MIN
+
+
+def _safe_truncate(value: Any) -> Any:
+    """Prevent massive strings or binary blobs from poisoning logs."""
+    if isinstance(value, str) and len(value) > _MAX_FIELD_LEN:
+        return value[:_MAX_FIELD_LEN] + "...[truncated]"
+    return value
+
+
+def _sanitize_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure user fields cannot override core metadata."""
+    clean = {}
+    for k, v in fields.items():
+        if k in _FORBIDDEN_KEYS:
+            clean[f"user_{k}"] = _safe_truncate(v)
+        else:
+            clean[k] = _safe_truncate(v)
+    return clean
 
 
 # ────────────────────────────────────────────────
 # Emit — JSON or human-readable
 # ────────────────────────────────────────────────
 def _emit(record: Dict[str, Any]) -> None:
-    if LOG_JSON:
-        sys.stdout.write(json.dumps(record, ensure_ascii=False) + "\n")
-    else:
-        ts = record.get("ts")
-        lvl = record.get("level")
-        rid = record.get("request_id", "—")
-        msg = record.get("message", "")
-        sys.stdout.write(f"[{ts}] {lvl} ({rid}) {msg}\n")
-    sys.stdout.flush()
+    try:
+        if LOG_JSON:
+            sys.stdout.write(json.dumps(record, ensure_ascii=False) + "\n")
+        else:
+            ts = record.get("ts")
+            lvl = record.get("level")
+            rid = record.get("request_id", "—")
+            msg = record.get("message", "")
+            sys.stdout.write(f"[{ts}] {lvl} ({rid}) {msg}\n")
+    except Exception as e:
+        # Failsafe logging
+        sys.stdout.write(
+            f"[LOGGING ERROR] Could not encode log record: {e}\n"
+        )
+    finally:
+        sys.stdout.flush()
 
 
 # ────────────────────────────────────────────────
-# v5.0 — Core logging function (contract-aware)
+# v5.1 — Core logging function (hardened + contract-aware)
 # ────────────────────────────────────────────────
 def log_event(
     level: str = "INFO",
@@ -81,29 +117,33 @@ def log_event(
     if not _should(level):
         return
 
-    # 1) Legacy request_id fallback
+    # Legacy fallback
     rid_legacy = _request_id_ctx.get() or str(uuid.uuid4())
 
-    # 2) v5.0 observability context (IDs + Sonic-3 contract)
+    # Request context (IDs + Sonic-3 contract)
     ctx = request_log_context()
 
-    # Extract enriched IDs if present
     rid = ctx.get("request_id") or rid_legacy
     corr = ctx.get("correlation_id")
-    sonic3 = ctx.get("sonic3_contract")
+    sonic3 = ctx.get("sonic3_contract")  # May be None
+
+    # Extract contract validity if present
+    contract_valid = None
+    if isinstance(sonic3, dict):
+        contract_valid = sonic3.get("valid")
 
     payload = {
         "ts": _now_iso(),
-        "level": level,
+        "level": level.upper(),
         "request_id": rid,
         "correlation_id": corr,
         "scope": scope or "general",
         "action": action or "log",
         "status": status,
-        "message": message,
-        # v5.0 additive Sonic-3 metadata
+        "message": _safe_truncate(message),
         "sonic3_contract": sonic3,
-        **fields,
+        "sonic3_contract_valid": contract_valid,
+        **_sanitize_fields(fields),
     }
 
     _emit(payload)
@@ -142,9 +182,6 @@ def log_error(message: str, *, scope: str, action: str, **fields: Any) -> None:
 # v5.0 — Contract mismatch / Stem signature warning
 # ────────────────────────────────────────────────
 def log_contract_warning(stem_name: str, stored_sig: str, expected_sig: str) -> None:
-    """
-    Logs a structured warning when cache_manager detects an incompatible stem.
-    """
     log_event(
         "WARN",
         f"Sonic-3 contract mismatch for stem '{stem_name}'",
