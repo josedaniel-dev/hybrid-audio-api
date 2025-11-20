@@ -1,21 +1,23 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
-CLI.py — Hybrid Audio API v5.1
-NDF-SAFE — Full Sonic-3 Contract + Router Alignment
+CLI.py — Hybrid Audio API v5.2
+NDF-SAFE — Sonic-3 Contract + Router Alignment + Hardened
 
 Features:
 • Uses HTTP routers (no internal imports)
-• Regenerated for v5.1 routes (generate / assemble / rotation / cache / external)
-• Adds extended=true support for debugging
-• Adds bucket verifiers
-• Removes deprecated force_regen and legacy assemble calls
-• Fully aligned with normalized labels:
-      stem.name.<name>
-      stem.developer.<developer>
+• v5.1 routes (generate / assemble / rotation / cache / external)
+• API base URL configurable via env: HYBRID_AUDIO_API_URL
+• Internal security header support: X-Internal-API-Key from INTERNAL_API_KEY
+• Global timeouts (CLI_TIMEOUT_SECONDS, default 90s)
+• Extended=true support for debugging
+• Bucket-ready (relies on backend)
+• Strong error handling (status_code + network errors)
+• Safe file handling for external uploads
 """
 
 import argparse
 import sys
+import os
 import json
 import requests
 from pathlib import Path
@@ -28,161 +30,348 @@ from config import (
     DEVELOPER_NAMES_FILE,
 )
 
-API = "http://127.0.0.1:8000"
+# ────────────────────────────────────────────────
+# Configurable API + Security + Timeout
+# ────────────────────────────────────────────────
+
+API = os.getenv("HYBRID_AUDIO_API_URL", "http://127.0.0.1:8000")
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+DEFAULT_TIMEOUT = float(os.getenv("CLI_TIMEOUT_SECONDS", "90"))
 
 
 # ────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────
-def _j(x):
+
+def _j(x: Any) -> None:
     print(json.dumps(x, indent=2, ensure_ascii=False))
 
 
-def _ensure_dirs():
+def _ensure_dirs() -> None:
     STEMS_DIR.mkdir(exist_ok=True)
     OUTPUT_DIR.mkdir(exist_ok=True)
+
+
+def _build_headers() -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    if INTERNAL_API_KEY:
+        headers["X-Internal-API-Key"] = INTERNAL_API_KEY
+    return headers
+
+
+def _request(
+    method: str,
+    path: str,
+    *,
+    params: Dict[str, Any] | None = None,
+    payload_json: Any | None = None,
+    files: Dict[str, Any] | None = None,
+    data: Dict[str, Any] | None = None,
+) -> Any:
+    """
+    Hardened HTTP request wrapper:
+      • Respects HYBRID_AUDIO_API_URL
+      • Injects X-Internal-API-Key when set
+      • Applies timeout
+      • Fails noisily on network / HTTP errors
+    """
+    url = f"{API}{path}"
+    headers = _build_headers()
+
+    try:
+        resp = requests.request(
+            method=method.upper(),
+            url=url,
+            params=params,
+            json=payload_json,
+            files=files,
+            data=data,
+            headers=headers,
+            timeout=DEFAULT_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        print(f"❌ Request failed: {exc}", file=sys.stderr)
+        print(f"   → {method.upper()} {url}", file=sys.stderr)
+        sys.exit(1)
+
+    if not resp.ok:
+        try:
+            body = resp.json()
+            body_str = json.dumps(body, indent=2, ensure_ascii=False)
+        except Exception:
+            body_str = resp.text
+
+        print(f"❌ API error {resp.status_code} for {method.upper()} {url}", file=sys.stderr)
+        if body_str:
+            print(body_str, file=sys.stderr)
+        sys.exit(1)
+
+    # Expect JSON everywhere in this API
+    try:
+        return resp.json()
+    except Exception:
+        print(f"⚠️ Non-JSON response from {url}", file=sys.stderr)
+        print(resp.text, file=sys.stderr)
+        sys.exit(1)
 
 
 # ────────────────────────────────────────────────
 # Generate
 # ────────────────────────────────────────────────
 
-def cmd_gen_name(args):
+def cmd_gen_name(args: argparse.Namespace) -> None:
     payload = {
         "name": args.name.title(),
         "voice_id": args.voice_id,
     }
-    r = requests.post(f"{API}/generate/name?extended={args.extended}", json=payload)
-    _j(r.json())
+    result = _request(
+        "POST",
+        "/generate/name",
+        params={"extended": bool(args.extended)},
+        payload_json=payload,
+    )
+    _j(result)
 
 
-def cmd_gen_dev(args):
+def cmd_gen_dev(args: argparse.Namespace) -> None:
     payload = {
         "developer": args.developer.title(),
         "voice_id": args.voice_id,
     }
-    r = requests.post(f"{API}/generate/developer?extended={args.extended}", json=payload)
-    _j(r.json())
+    result = _request(
+        "POST",
+        "/generate/developer",
+        params={"extended": bool(args.extended)},
+        payload_json=payload,
+    )
+    _j(result)
 
 
-def cmd_gen_combined(args):
+def cmd_gen_combined(args: argparse.Namespace) -> None:
     payload = {
         "name": args.name.title(),
         "developer": args.developer.title(),
         "voice_id": args.voice_id,
     }
-    r = requests.post(f"{API}/generate/combined?extended={args.extended}", json=payload)
-    _j(r.json())
+    result = _request(
+        "POST",
+        "/generate/combined",
+        params={"extended": bool(args.extended)},
+        payload_json=payload,
+    )
+    _j(result)
 
 
 # ────────────────────────────────────────────────
 # Assemble
 # ────────────────────────────────────────────────
 
-def cmd_ass_template(args):
+def cmd_ass_template(args: argparse.Namespace) -> None:
     payload = {
         "first_name": args.name.title(),
         "developer": args.developer.title(),
         "template": args.template,
-        "upload": args.upload,
+        "upload": bool(args.upload),
     }
-    r = requests.post(f"{API}/assemble/template?extended={args.extended}", json=payload)
-    _j(r.json())
+    result = _request(
+        "POST",
+        "/assemble/template",
+        params={"extended": bool(args.extended)},
+        payload_json=payload,
+    )
+    _j(result)
 
 
-def cmd_ass_raw(args):
+def cmd_ass_raw(args: argparse.Namespace) -> None:
     payload = {
         "segments": args.stems,
-        "upload": args.upload,
+        "upload": bool(args.upload),
     }
-    r = requests.post(f"{API}/assemble/segments", json=payload)
-    _j(r.json())
+    # Extended mode opcional — solo si backend lo soporta
+    result = _request(
+        "POST",
+        "/assemble/segments",
+        payload_json=payload,
+    )
+    _j(result)
 
 
-def cmd_ass_outloc(args):
-    r = requests.get(f"{API}/assemble/output_location")
-    _j(r.json())
+def cmd_ass_outloc(args: argparse.Namespace) -> None:
+    result = _request("GET", "/assemble/output_location")
+    _j(result)
 
 
 # ────────────────────────────────────────────────
 # Rotation
 # ────────────────────────────────────────────────
 
-def cmd_rot_next_name(args):
-    r = requests.get(f"{API}/rotation/next_name")
-    _j(r.json())
+def cmd_rot_next_name(args: argparse.Namespace) -> None:
+    result = _request("GET", "/rotation/next_name")
+    _j(result)
 
 
-def cmd_rot_next_dev(args):
-    r = requests.get(f"{API}/rotation/next_developer")
-    _j(r.json())
+def cmd_rot_next_dev(args: argparse.Namespace) -> None:
+    result = _request("GET", "/rotation/next_developer")
+    _j(result)
 
 
-def cmd_rot_next_pair(args):
-    r = requests.get(f"{API}/rotation/next_pair")
-    _j(r.json())
+def cmd_rot_next_pair(args: argparse.Namespace) -> None:
+    result = _request("GET", "/rotation/next_pair")
+    _j(result)
 
 
-def cmd_rot_generate(args):
+def cmd_rot_generate(args: argparse.Namespace) -> None:
     payload = {"voice_id": args.voice_id}
-    r = requests.post(f"{API}/rotation/generate_pair?extended={args.extended}", json=payload)
-    _j(r.json())
+    result = _request(
+        "POST",
+        "/rotation/generate_pair",
+        params={"extended": bool(args.extended)},
+        payload_json=payload,
+    )
+    _j(result)
 
 
-def cmd_rot_stream(args):
-    r = requests.get(f"{API}/rotation/pairs_stream?limit={args.limit}")
-    _j(r.json())
+def cmd_rot_stream(args: argparse.Namespace) -> None:
+    result = _request(
+        "GET",
+        "/rotation/pairs_stream",
+        params={"limit": int(args.limit)},
+    )
+    _j(result)
 
 
 # ────────────────────────────────────────────────
 # Cache
 # ────────────────────────────────────────────────
 
-def cmd_cache_list(args):
-    r = requests.get(f"{API}/cache/list?extended={args.extended}")
-    _j(r.json())
+def cmd_cache_list(args: argparse.Namespace) -> None:
+    result = _request(
+        "GET",
+        "/cache/list",
+        params={"extended": bool(args.extended)},
+    )
+    _j(result)
 
 
-def cmd_cache_invalidate(args):
+def cmd_cache_invalidate(args: argparse.Namespace) -> None:
     payload = {"stem_name": args.stem}
-    r = requests.post(f"{API}/cache/invalidate", json=payload)
-    _j(r.json())
+    result = _request("POST", "/cache/invalidate", payload_json=payload)
+    _j(result)
 
 
-def cmd_cache_bulk(args):
+def cmd_cache_bulk(args: argparse.Namespace) -> None:
     payload = {
         "names_path": args.names or str(COMMON_NAMES_FILE),
         "developers_path": args.developers or str(DEVELOPER_NAMES_FILE),
     }
-    r = requests.post(f"{API}/cache/bulk_generate", json=payload)
-    _j(r.json())
+    result = _request("POST", "/cache/bulk_generate", payload_json=payload)
+    _j(result)
 
 
 # ────────────────────────────────────────────────
 # External dataset intake
 # ────────────────────────────────────────────────
 
-def cmd_ext_upload(args):
-    files = {"file": open(args.path, "rb")}
-    data = {"dataset_role": args.role, "target_name": args.target}
-    r = requests.post(f"{API}/external/upload_base", files=files, data=data)
-    _j(r.json())
+def _ensure_file_exists(path: str) -> Path:
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        print(f"❌ File not found: {p}", file=sys.stderr)
+        sys.exit(1)
+    return p
 
 
-def cmd_ext_preview(args):
-    files = {"file": open(args.path, "rb")}
-    r = requests.post(f"{API}/external/preview", files=files)
-    _j(r.json())
+def cmd_ext_upload(args: argparse.Namespace) -> None:
+    p = _ensure_file_exists(args.path)
+    with p.open("rb") as f:
+        files = {"file": f}
+        data = {
+            "dataset_role": args.role,
+            "target_name": args.target or "",
+        }
+        # requests.request with files -> no json param
+        url = f"{API}/external/upload_base"
+        headers = _build_headers()
+        try:
+            resp = requests.post(
+                url,
+                files=files,
+                data=data,
+                headers=headers,
+                timeout=DEFAULT_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            print(f"❌ Request failed: {exc}", file=sys.stderr)
+            print(f"   → POST {url}", file=sys.stderr)
+            sys.exit(1)
+
+        if not resp.ok:
+            try:
+                body = resp.json()
+                body_str = json.dumps(body, indent=2, ensure_ascii=False)
+            except Exception:
+                body_str = resp.text
+            print(f"❌ API error {resp.status_code} for POST {url}", file=sys.stderr)
+            if body_str:
+                print(body_str, file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            result = resp.json()
+        except Exception:
+            print("⚠️ Non-JSON response from external/upload_base", file=sys.stderr)
+            print(resp.text, file=sys.stderr)
+            sys.exit(1)
+
+    _j(result)
+
+
+def cmd_ext_preview(args: argparse.Namespace) -> None:
+    p = _ensure_file_exists(args.path)
+    with p.open("rb") as f:
+        files = {"file": f}
+        url = f"{API}/external/preview"
+        headers = _build_headers()
+        try:
+            resp = requests.post(
+                url,
+                files=files,
+                headers=headers,
+                timeout=DEFAULT_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            print(f"❌ Request failed: {exc}", file=sys.stderr)
+            print(f"   → POST {url}", file=sys.stderr)
+            sys.exit(1)
+
+        if not resp.ok:
+            try:
+                body = resp.json()
+                body_str = json.dumps(body, indent=2, ensure_ascii=False)
+            except Exception:
+                body_str = resp.text
+            print(f"❌ API error {resp.status_code} for POST {url}", file=sys.stderr)
+            if body_str:
+                print(body_str, file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            result = resp.json()
+        except Exception:
+            print("⚠️ Non-JSON response from external/preview", file=sys.stderr)
+            print(resp.text, file=sys.stderr)
+            sys.exit(1)
+
+    _j(result)
 
 
 # ────────────────────────────────────────────────
 # Parser
 # ────────────────────────────────────────────────
 
-def build():
+def build() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="CLI.py",
-        description="Hybrid Audio API — CLI Orchestrator (v5.1)",
+        description="Hybrid Audio API — CLI Orchestrator (v5.2, hardened)",
     )
 
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -282,7 +471,9 @@ def build():
 
 
 # ────────────────────────────────────────────────
-def main(argv=None):
+
+def main(argv: list[str] | None = None) -> None:
+    _ensure_dirs()
     parser = build()
     args = parser.parse_args(argv)
     args.func(args)
