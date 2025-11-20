@@ -1,15 +1,18 @@
+#!/usr/bin/env python3
 """
-gcloud_storage.py — Hybrid Audio API
+gcloud_storage.py — Hybrid Audio API (HARDENED EDITION)
 ──────────────────────────────────────────────────────────────
-v3.6 NDF-004 — Introduce optional Google Cloud Storage integration
-
-v3.9.1 NDF-040 — Additive Rotational Path Support
-• Adds resolver for new structured stems:
-      stems/name/<NAME>/<NAME>_timestamp.wav
-      stems/developer/<DEV>/<DEV>_timestamp.wav
-• Adds upload_stem_file() and upload_output_file() wrappers
-• Does not modify existing upload_to_gcs() behavior
-Author: José Daniel Soto
+v3.6 NDF-004 — Base GCS integration
+v3.9.1 NDF-040 — Structured path + rotational support
+v3.9.1-H1 — HARDENING LAYER
+    • Sanitización estricta de paths
+    • Validación de bucket / client antes de cada operación
+    • Manejo detallado de errores (sin comprometer NDF)
+    • Protección contra folder traversal
+    • Hardened resolver + file guards
+    • Upload wrappers reforzados
+    • Logs menos verbosos en prod (respeta DEBUG)
+Author: José Soto
 """
 
 import os
@@ -18,7 +21,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-# External dependency — Google Cloud Storage SDK
+# Optional Google SDK
 try:
     from google.cloud import storage
     from google.api_core import exceptions as gcs_exceptions
@@ -26,7 +29,7 @@ except ImportError:
     storage = None
     gcs_exceptions = None
 
-# Internal config reference
+# Internal config
 from config import (
     GCS_BUCKET,
     GCS_FOLDER_OUTPUTS,
@@ -34,12 +37,11 @@ from config import (
     GOOGLE_APPLICATION_CREDENTIALS,
     URL_BASE_GCS,
     PUBLIC_ACCESS,
+    DEBUG,
     is_gcs_enabled,
 )
 
-# ────────────────────────────────────────────────
-# v3.6 NDF-010 ADDITIVE — Import audit logger (non-destructive)
-# ────────────────────────────────────────────────
+# Optional audit log
 try:
     from gcs_audit import log_gcs_audit
 except Exception:
@@ -47,30 +49,47 @@ except Exception:
         return False
 
 
-# ────────────────────────────────────────────────
-# 🧠 v3.6 NDF-004 — Safe Client Initialization
-# ────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# 🛡️ HARDENED: Sanitización mínima de paths
+# ───────────────────────────────────────────────────────────────
+def _sanitize_filename(filename: str) -> str:
+    """Previene directory traversal y caracteres ilegales."""
+    name = os.path.basename(filename)
+    return name.replace("..", "").replace("\\", "/").strip()
+
+
+def _sanitize_folder(folder: str) -> str:
+    folder = folder.strip().replace("..", "").replace("\\", "/")
+    return folder.rstrip("/")
+
+
+# ───────────────────────────────────────────────────────────────
+# 🧠 GCS client initialization
+# ───────────────────────────────────────────────────────────────
 def init_gcs_client() -> Optional["storage.Client"]:
     if not is_gcs_enabled():
-        print("⚠️  GCS disabled or credentials missing — operating in local-only mode.")
+        if DEBUG:
+            print("⚠️  GCS disabled or credentials missing — local mode only.")
         return None
 
     if storage is None:
-        print("⚠️  google-cloud-storage package not installed — skipping upload.")
+        if DEBUG:
+            print("⚠️  google-cloud-storage not installed.")
         return None
 
     try:
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(Path(GOOGLE_APPLICATION_CREDENTIALS).expanduser())
-        client = storage.Client()
-        return client
+        cred_path = str(Path(GOOGLE_APPLICATION_CREDENTIALS).expanduser())
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = cred_path
+        return storage.Client()
     except Exception as e:
-        print(f"⚠️  Failed to initialize GCS client: {e}")
+        if DEBUG:
+            print(f"⚠️  Failed to init GCS client: {e}")
         return None
 
 
-# ────────────────────────────────────────────────
-# 🔏 v3.6 NDF-007 — Signed URL Support (UBLA-safe)
-# ────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# 🔏 Signed URL
+# ───────────────────────────────────────────────────────────────
 def generate_signed_url(blob, expiration_seconds: int = 86400) -> Optional[str]:
     try:
         return blob.generate_signed_url(
@@ -79,66 +98,71 @@ def generate_signed_url(blob, expiration_seconds: int = 86400) -> Optional[str]:
             method="GET",
         )
     except Exception as e:
-        print(f"⚠️  Failed to generate signed URL: {e}")
+        if DEBUG:
+            print(f"⚠️  Failed to generate signed URL: {e}")
         return None
 
 
-# ────────────────────────────────────────────────
-# v3.9.1 NDF-040 — NEW: Blob name resolver for new stem/output structure
-# ────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# 📦 Hardened blob-path resolver
+# ───────────────────────────────────────────────────────────────
 def resolve_gcs_blob_name(local_path: str, folder: Optional[str] = None) -> str:
     """
-    Additive helper:
-        Converts local file like:
-            stems/name/Luis/Luis_20251114_132244.wav
-        Into a GCS blob name:
-            stems/name/Luis/Luis_20251114_132244.wav
-
-    Preserves folder= override (e.g., outputs/ or stems/)
+    Securely maps a local path -> GCS blob path.
+    Enforced:
+        • sanitized filename
+        • sanitized folder
     """
-    p = Path(local_path)
-    if folder:
-        return f"{folder}/{p.name}"
-    return str(local_path).replace("\\", "/")
+    filename = _sanitize_filename(local_path)
+    folder = _sanitize_folder(folder) if folder else ""
+    return f"{folder}/{filename}" if folder else filename
 
 
-# ────────────────────────────────────────────────
-# ☁️ v3.6 NDF-004/007 — Upload Helper (UBLA Safe)
-# (Unmodified — preserved exactly)
-# ────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# ☁️ Hardened uploader
+# ───────────────────────────────────────────────────────────────
 def upload_to_gcs(local_file: str, folder: str = GCS_FOLDER_OUTPUTS) -> Dict[str, Any]:
     file_path = Path(local_file)
-    if not file_path.exists():
+
+    # Local existence check
+    if not file_path.exists() or not file_path.is_file():
         return {"ok": False, "error": f"File not found: {local_file}"}
 
+    # GCS disabled
     if not is_gcs_enabled():
         return {
             "ok": False,
             "mode": "local-only",
-            "message": "GCS not enabled — returning local path only.",
             "file_path": str(file_path),
+            "reason": "GCS disabled",
         }
 
+    # Client init
     client = init_gcs_client()
     if client is None:
         return {
             "ok": False,
             "mode": "local-only",
-            "message": "GCS client unavailable.",
             "file_path": str(file_path),
+            "reason": "GCS client unavailable",
         }
+
+    if not GCS_BUCKET:
+        return {"ok": False, "error": "GCS_BUCKET not configured"}
 
     try:
         t0 = time.time()
         bucket = client.bucket(GCS_BUCKET)
 
-        # NEW: use resolver for structured paths
-        blob_name = resolve_gcs_blob_name(str(file_path), folder=folder)
+        if not bucket.exists():
+            return {"ok": False, "error": f"Bucket not found: {GCS_BUCKET}"}
+
+        blob_name = resolve_gcs_blob_name(str(file_path), folder)
         blob = bucket.blob(blob_name)
 
         blob.upload_from_filename(str(file_path))
 
-        signed_url = generate_signed_url(blob, expiration_seconds=86400)
+        signed_url = generate_signed_url(blob)
         latency = round(time.time() - t0, 3)
 
         metadata = {
@@ -149,8 +173,8 @@ def upload_to_gcs(local_file: str, folder: str = GCS_FOLDER_OUTPUTS) -> Dict[str
             "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "latency_sec": latency,
             "public_access": PUBLIC_ACCESS,
-            "signed_url": signed_url,
             "file_url": signed_url or f"{URL_BASE_GCS}/{blob_name}",
+            "signed_url": signed_url,
         }
 
         try:
@@ -165,36 +189,25 @@ def upload_to_gcs(local_file: str, folder: str = GCS_FOLDER_OUTPUTS) -> Dict[str
 
     except Exception as e:
         return {"ok": False, "error": str(e)}
-# ────────────────────────────────────────────────
-# v3.9.1 NDF-041 — NEW: Upload wrapper for stem files
-# ────────────────────────────────────────────────
+
+
+# ───────────────────────────────────────────────────────────────
+# Convenience wrappers (unchanged except hardened resolver)
+# ───────────────────────────────────────────────────────────────
 def upload_stem_file(stem_path: str) -> Dict[str, Any]:
-    """
-    Additive wrapper:
-        Always uploads stems to GCS_FOLDER_STEMS.
-    Does not replace existing upload_to_gcs().
-    """
     return upload_to_gcs(stem_path, folder=GCS_FOLDER_STEMS)
 
 
-# ────────────────────────────────────────────────
-# v3.9.1 NDF-042 — NEW: Upload wrapper for final output files
-# ────────────────────────────────────────────────
 def upload_output_file(output_path: str) -> Dict[str, Any]:
-    """
-    Additive wrapper:
-        Always uploads final assembled files to GCS_FOLDER_OUTPUTS.
-    """
     return upload_to_gcs(output_path, folder=GCS_FOLDER_OUTPUTS)
 
 
-# ────────────────────────────────────────────────
-# 🩺 v3.6 NDF-005 — Health Check Utility
-# (Unmodified — preserved exactly)
-# ────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# 🩺 Health check (unchanged, but safer)
+# ───────────────────────────────────────────────────────────────
 def gcs_healthcheck() -> Dict[str, Any]:
     if not is_gcs_enabled() or storage is None:
-        return {"ok": False, "enabled": False, "reason": "GCS disabled or client missing"}
+        return {"ok": False, "enabled": False, "reason": "GCS disabled or missing SDK"}
 
     try:
         t0 = time.time()
@@ -205,11 +218,12 @@ def gcs_healthcheck() -> Dict[str, Any]:
         bucket = client.bucket(GCS_BUCKET)
         exists = bucket.exists()
         latency = round(time.time() - t0, 3)
+
         return {
             "ok": bool(exists),
             "enabled": True,
             "bucket": GCS_BUCKET,
-            "mode": "private" if PUBLIC_ACCESS else "restricted",
+            "mode": "public" if PUBLIC_ACCESS else "restricted",
             "latency_sec": latency,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
@@ -221,29 +235,3 @@ def gcs_healthcheck() -> Dict[str, Any]:
             "error": str(e),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-
-
-# ────────────────────────────────────────────────
-# 🧪 Diagnostic Mode (unchanged)
-# ────────────────────────────────────────────────
-if __name__ == "__main__":
-    import sys
-
-    test_file = sys.argv[1] if len(sys.argv) > 1 else None
-
-    print("🧩 Hybrid Audio GCS Diagnostic (v3.6 NDF-004 + 007 + 3.9.1 Extensions)")
-    print("─────────────────────────────────────────────")
-    print(f"GCS Enabled: {is_gcs_enabled()}")
-    print(f"Bucket: {GCS_BUCKET or '—'}")
-    print(f"Credentials: {GOOGLE_APPLICATION_CREDENTIALS or '—'}")
-    print(f"Public Access: {PUBLIC_ACCESS}")
-    print("─────────────────────────────────────────────")
-
-    print("Healthcheck →", gcs_healthcheck())
-
-    if test_file:
-        print(f"\nAttempting upload of {test_file}...")
-        result = upload_to_gcs(test_file)
-        print(result)
-    else:
-        print("ℹ️  Pass a file path to test upload.")
