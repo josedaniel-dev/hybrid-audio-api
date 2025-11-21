@@ -88,13 +88,22 @@ def _make_label(prefix: str, item: str) -> str:
     v5.1 — Canonical label resolver:
         • prefix in {"stem_name", "name"}      → stem.name.<slug>
         • prefix in {"stem_brand","developer"} → stem.developer.<slug>
+        • NEW v5.3 → {"script", "stem_script", "generic", "stem_generic"}
+                 → stem.script.<slug>
         • else                                 → <prefix>.<slug>
     """
     if prefix in ("stem_name", "name"):
         return stem_label_name(item)
+
     if prefix in ("stem_brand", "developer", "dev"):
         return stem_label_developer(item)
+
+    # NDF-030 — NEW script stem category (additive, never destructive)
+    if prefix in ("script", "stem_script", "generic", "stem_generic"):
+        return f"stem.script.{_slugify(item)}"
+
     return f"{prefix}.{_slugify(item)}"
+
 
 
 # -------------------------------------------------

@@ -1,17 +1,13 @@
 {
-  // Internal version tag (not used by API logic)
   "_version_comment": "double_anchor_hybrid_v4.0 — Sonic-3 aligned, NDF-safe",
-
   "template_name": "double_anchor_hybrid",
   "version": "v4.0 NDF — Sonic3-Aligned",
   "description": "Double-anchor hybrid refined pacing — calm tone, normalized speed 1.0. Fully aligned with Sonic-3 contract and deterministic stem naming.",
-
   "voice_config": {
     "speed": 1.0,
     "volume": 1.0,
     "tone": "calm"
   },
-
   "segments": [
     {
       "id": "stem.name.intro",
@@ -19,7 +15,17 @@
       "gap_ms": 120,
       "crossfade_ms": 20,
       "break_ms": 400,
-      "estimated_duration_ms": 2200
+      "estimated_duration_ms": 2200,
+      "generation_config": {
+        "speed": 1.0,
+        "volume": 1.0
+      },
+      "output_format": {
+        "container": "wav",
+        "encoding": "pcm_s16le",
+        "sample_rate": 48000
+      },
+      "model_id": "sonic-3"
     },
     {
       "id": "stem.generic.followup",
@@ -27,7 +33,17 @@
       "gap_ms": 90,
       "crossfade_ms": 20,
       "break_ms": 250,
-      "estimated_duration_ms": 1800
+      "estimated_duration_ms": 1800,
+      "generation_config": {
+        "speed": 1.0,
+        "volume": 1.0
+      },
+      "output_format": {
+        "container": "wav",
+        "encoding": "pcm_s16le",
+        "sample_rate": 48000
+      },
+      "model_id": "sonic-3"
     },
     {
       "id": "stem.developer.main",
@@ -35,7 +51,17 @@
       "gap_ms": 100,
       "crossfade_ms": 25,
       "break_ms": 400,
-      "estimated_duration_ms": 1900
+      "estimated_duration_ms": 1900,
+      "generation_config": {
+        "speed": 1.0,
+        "volume": 1.0
+      },
+      "output_format": {
+        "container": "wav",
+        "encoding": "pcm_s16le",
+        "sample_rate": 48000
+      },
+      "model_id": "sonic-3"
     },
     {
       "id": "stem.generic.closing",
@@ -43,10 +69,19 @@
       "gap_ms": 120,
       "crossfade_ms": 25,
       "break_ms": 600,
-      "estimated_duration_ms": 4800
+      "estimated_duration_ms": 4800,
+      "generation_config": {
+        "speed": 1.0,
+        "volume": 1.0
+      },
+      "output_format": {
+        "container": "wav",
+        "encoding": "pcm_s16le",
+        "sample_rate": 48000
+      },
+      "model_id": "sonic-3"
     }
   ],
-
   "timing_map": [
     {
       "from": "stem.name.intro",
@@ -67,7 +102,6 @@
       "crossfade_ms": 25
     }
   ],
-
   "variants": {
     "fast_assertive": {
       "description": "Same structure, slightly accelerated for confident tone.",
@@ -86,7 +120,6 @@
       }
     }
   },
-
   "metadata": {
     "author": "José Soto",
     "engine": "Cartesia Sonic-3",

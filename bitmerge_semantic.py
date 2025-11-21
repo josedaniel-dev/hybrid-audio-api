@@ -63,11 +63,11 @@ def _read_wav_pcm(path: str) -> Tuple[np.ndarray, int, str, int]:
 
 
 def _assert_compatible(base: Dict[str, Any], cur: Dict[str, Any], path: str) -> None:
-    if cur["samplerate"] != base["samplerate"] or cur["channels"] != base["channels"]:
+    if cur["sample_rate"] != base["sample_rate"] or cur["channels"] != base["channels"]:
         raise ValueError(
             f"Format mismatch in {Path(path).name}: "
-            f"{cur['samplerate']} Hz / {cur['channels']} ch ≠ "
-            f"{base['samplerate']} Hz / {base['channels']} ch"
+            f"{cur['sample_rate']} Hz / {cur['channels']} ch ≠ "
+            f"{base['sample_rate']} Hz / {base['channels']} ch"
         )
 
 # ────────────────────────────────────────────────
@@ -126,7 +126,7 @@ def assemble_with_timing_map_bitmerge(
 
     # Read first stem
     a, sr, subtype, ch = _read_wav_pcm(stems[0])
-    base_fmt = {"samplerate": sr, "channels": ch, "subtype": subtype}
+    base_fmt = {"sample_rate": sr, "channels": ch, "subtype": subtype}
 
     _log(f"🔍 Base format: {sr} Hz · {ch} ch · {subtype}")
 
@@ -138,7 +138,7 @@ def assemble_with_timing_map_bitmerge(
         bid = Path(stems[i+1]).stem
 
         b, sr_b, subtype_b, ch_b = _read_wav_pcm(stems[i+1])
-        _assert_compatible(base_fmt, {"samplerate": sr_b, "channels": ch_b, "subtype": subtype_b}, stems[i+1])
+        _assert_compatible(base_fmt, {"sample_rate": sr_b, "channels": ch_b, "subtype": subtype_b}, stems[i+1])
 
         tr = tm.get((aid, bid), {"gap_ms": 0.0, "crossfade_ms": 10})
         gap = float(tr["gap_ms"])
@@ -184,7 +184,7 @@ def verify_integrity(base_dir: str = "stems") -> None:
     for s in stems[1:]:
         i = sf.info(s)
         if i.samplerate != ref.samplerate or i.channels != ref.channels:
-            mismatches.append((s.name, i.samplerate, i.channels))
+            mismatches.append((s.name, i.sample_rate, i.channels))
 
     if mismatches:
         _log("❌ Inconsistent stems:")

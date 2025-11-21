@@ -37,18 +37,32 @@ output/
 logs/
 
 # Important: we DO NOT ignore /data because it contains datasets + stems_index.json
-# We ignore only auto-generated cache inside data if needed:
 data/*.tmp
 data/cache_backup/
 
 # ─────────────────────────────────────────────
-# Security / Credentials
+# SECURITY / CREDENTIALS (FULL LOCKDOWN)
 # ─────────────────────────────────────────────
+# Entire credentials directory MUST NEVER be versioned
+credentials/
+credentials/**
+
+# Explicit file-level ignores (defense in depth)
 .env
 *.key
 *.pem
+*.crt
+*.cer
+*.der
+*.pfx
+*.p12
+*.json
 service-account.json
 gcloud_credentials.json
+
+# But DO NOT ignore json in templates/
+!templates/*.json
+
 
 # ─────────────────────────────────────────────
 # Audio / Media
@@ -56,8 +70,6 @@ gcloud_credentials.json
 *.wav
 *.mp3
 *.flac
-
-# (Stems + outputs folders are already ignored above)
 
 # ─────────────────────────────────────────────
 # Build / Distribution
@@ -75,6 +87,6 @@ coverage.xml
 htmlcov/
 
 # ─────────────────────────────────────────────
-# Node / UI (if frontend added later)
+# Node / UI (future-proof)
 # ─────────────────────────────────────────────
 node_modules/

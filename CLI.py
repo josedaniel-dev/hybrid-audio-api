@@ -5,7 +5,7 @@ NDF-SAFE — Sonic-3 Contract + Router Alignment + Hardened
 
 Features:
 • Uses HTTP routers (no internal imports)
-• v5.1 routes (generate / assemble / rotation / cache / external)
+• v5.1/v5.2 routes (generate / assemble / rotation / cache / external)
 • API base URL configurable via env: HYBRID_AUDIO_API_URL
 • Internal security header support: X-Internal-API-Key from INTERNAL_API_KEY
 • Global timeouts (CLI_TIMEOUT_SECONDS, default 90s)
@@ -202,7 +202,7 @@ def cmd_ass_outloc(args: argparse.Namespace) -> None:
 
 
 # ────────────────────────────────────────────────
-# Rotation
+# Rotation (names/developers + scripts)
 # ────────────────────────────────────────────────
 
 def cmd_rot_next_name(args: argparse.Namespace) -> None:
@@ -240,6 +240,42 @@ def cmd_rot_stream(args: argparse.Namespace) -> None:
     _j(result)
 
 
+# ── v5.2 Script rotation commands (additive) ──
+
+def cmd_rot_next_script(args: argparse.Namespace) -> None:
+    result = _request("GET", "/rotation/next_script")
+    _j(result)
+
+
+def cmd_rot_generate_script(args: argparse.Namespace) -> None:
+    payload = {"voice_id": args.voice_id}
+    result = _request(
+        "POST",
+        "/rotation/generate_script",
+        params={"extended": bool(args.extended)},
+        payload_json=payload,
+    )
+    _j(result)
+
+
+def cmd_rot_scripts_stream(args: argparse.Namespace) -> None:
+    result = _request(
+        "GET",
+        "/rotation/scripts_stream",
+        params={"limit": int(args.limit)},
+    )
+    _j(result)
+
+
+def cmd_rot_check_bucket(args: argparse.Namespace) -> None:
+    result = _request(
+        "GET",
+        "/rotation/check_bucket",
+        params={"label": args.label},
+    )
+    _j(result)
+
+
 # ────────────────────────────────────────────────
 # Cache
 # ────────────────────────────────────────────────
@@ -265,6 +301,24 @@ def cmd_cache_bulk(args: argparse.Namespace) -> None:
         "developers_path": args.developers or str(DEVELOPER_NAMES_FILE),
     }
     result = _request("POST", "/cache/bulk_generate", payload_json=payload)
+    _j(result)
+
+
+def cmd_cache_check_in_bucket(args: argparse.Namespace) -> None:
+    result = _request(
+        "GET",
+        "/cache/check_in_bucket",
+        params={"label": args.label},
+    )
+    _j(result)
+
+
+def cmd_cache_bucket_list(args: argparse.Namespace) -> None:
+    result = _request(
+        "GET",
+        "/cache/bucket_list",
+        params={"prefix": args.prefix or ""},
+    )
     _j(result)
 
 
@@ -364,6 +418,20 @@ def cmd_ext_preview(args: argparse.Namespace) -> None:
     _j(result)
 
 
+def cmd_ext_list(args: argparse.Namespace) -> None:
+    result = _request("GET", "/external/list")
+    _j(result)
+
+
+def cmd_ext_delete(args: argparse.Namespace) -> None:
+    result = _request(
+        "DELETE",
+        "/external/delete",
+        params={"filename": args.filename},
+    )
+    _j(result)
+
+
 # ────────────────────────────────────────────────
 # Parser
 # ────────────────────────────────────────────────
@@ -436,6 +504,23 @@ def build() -> argparse.ArgumentParser:
     r5.add_argument("--limit", type=int, default=10)
     r5.set_defaults(func=cmd_rot_stream)
 
+    # v5.2 script-related rotation subcommands
+    r6 = rs.add_parser("next_script")
+    r6.set_defaults(func=cmd_rot_next_script)
+
+    r7 = rs.add_parser("generate_script")
+    r7.add_argument("--voice_id")
+    r7.add_argument("--extended", action="store_true")
+    r7.set_defaults(func=cmd_rot_generate_script)
+
+    r8 = rs.add_parser("scripts_stream")
+    r8.add_argument("--limit", type=int, default=10)
+    r8.set_defaults(func=cmd_rot_scripts_stream)
+
+    r9 = rs.add_parser("check_bucket")
+    r9.add_argument("label")
+    r9.set_defaults(func=cmd_rot_check_bucket)
+
     # ─ cache ─
     c = sub.add_parser("cache")
     cs = c.add_subparsers(dest="ctype", required=True)
@@ -453,6 +538,14 @@ def build() -> argparse.ArgumentParser:
     cb.add_argument("--developers")
     cb.set_defaults(func=cmd_cache_bulk)
 
+    cc = cs.add_parser("check_in_bucket")
+    cc.add_argument("label")
+    cc.set_defaults(func=cmd_cache_check_in_bucket)
+
+    cbl = cs.add_parser("bucket_list")
+    cbl.add_argument("--prefix", default="")
+    cbl.set_defaults(func=cmd_cache_bucket_list)
+
     # ─ external ─
     e = sub.add_parser("external")
     es = e.add_subparsers(dest="etype", required=True)
@@ -466,6 +559,13 @@ def build() -> argparse.ArgumentParser:
     e2 = es.add_parser("preview")
     e2.add_argument("path")
     e2.set_defaults(func=cmd_ext_preview)
+
+    e3 = es.add_parser("list")
+    e3.set_defaults(func=cmd_ext_list)
+
+    e4 = es.add_parser("delete")
+    e4.add_argument("filename")
+    e4.set_defaults(func=cmd_ext_delete)
 
     return p
 

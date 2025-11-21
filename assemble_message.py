@@ -9,16 +9,6 @@ This version:
           - voice.mode="id", voice.id=<VOICE_ID>
           - output_format.container="wav"
           - output_format.encoding="pcm_s16le"
-          - sample_rate=<SAMPLE_RATE>
-    • Fixes all legacy stem-id-as-text cases
-    • Fully aligned with:
-          - cache_manager v5.0 (contract signatures)
-          - generate.py v5.0
-          - rotation.py v5.1
-          - batch_generate_stems v4.2
-          - bitmerge_semantic (semantic timing)
-          - gcs upload wrappers
-    • 100% NDF-safe, no destructive changes.
 """
 
 import json
@@ -27,6 +17,7 @@ import datetime
 import requests
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
+from config import build_sonic3_payload
 
 from config import (
     STEMS_DIR,
@@ -83,9 +74,6 @@ def ts_compact() -> str:
 # ============================================================
 
 def load_template(template_name: Optional[str]) -> Dict[str, Any]:
-    """
-    Loads a JSON template safely, NDF-compliant.
-    """
     try:
         tpl_path = get_template_path(template_name)
         if not tpl_path.exists():
@@ -108,10 +96,6 @@ def build_segments_from_template(
     name: str,
     developer: str,
 ) -> List[Tuple[str, str]]:
-    """
-    Renders {name} and {developer} placeholders.
-    Returns (segment_id, rendered_text)
-    """
     out: List[Tuple[str, str]] = []
     for seg in template.get("segments", []):
         seg_id = seg.get("id", "")
@@ -151,21 +135,15 @@ def cartesia_generate(
     voice_id: str = VOICE_ID,
     template: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """
-    Fully Sonic-3 compliant request.
-    """
 
     raw = text.strip()
 
-    # Fix accidental "stem_id as text"
     if raw.lower() == stem_name.lower():
         raw = _clean_text_from_stem(stem_name)
 
-    # rotational hook
     processed_text, _ = pre_tts_hook(raw, stem_name, voice_id=voice_id)
     true_text = processed_text
 
-    # cache lookup
     cached = get_cached_stem(stem_name)
     if cached:
         if DEBUG:
@@ -175,9 +153,26 @@ def cartesia_generate(
     print(f"[{ts()}] 🎤 Generating new stem → {stem_name}")
     STEMS_DIR.mkdir(exist_ok=True)
 
+    # ============================================================
+    # ⭐ NDF-SAFE PATCH (ÚNICO CAMBIO PERMITIDO)
+    #   Sustituye el target plano por el target estructurado
+    # ============================================================
+    try:
+        from naming_contract import infer_stem_category, build_stem_path
+        category = infer_stem_category(stem_name)
+        structured_path = build_stem_path(category, stem_name)
+        structured_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        structured_path = None
+
+    # Target original (NO eliminado)
     out_path = Path(STEMS_DIR) / f"{stem_name}.wav"
 
-    # Voice config inherited from template
+    # NDF: prefer structured folder if available
+    if structured_path:
+        out_path = structured_path
+    # ============================================================
+
     vc = (template or {}).get("voice_config", {})
     speed = float(vc.get("speed", 1.0))
     volume = float(vc.get("volume", 1.0))
@@ -206,10 +201,6 @@ def cartesia_generate(
         "Cartesia-Version": CARTESIA_VERSION,
     }
 
-    if DEBUG:
-        print(f"[{ts()}] 🔎 Sonic-3 Payload >>>")
-        print(json.dumps(payload, indent=2))
-
     try:
         r = requests.post(
             CARTESIA_API_URL,
@@ -222,7 +213,6 @@ def cartesia_generate(
         with open(out_path, "wb") as f:
             f.write(r.content)
 
-        # register in cache
         register_stem(
             name=stem_name,
             text=true_text,
@@ -247,6 +237,7 @@ def cartesia_generate(
         except Exception:
             pass
         raise
+
 
 
 # ============================================================

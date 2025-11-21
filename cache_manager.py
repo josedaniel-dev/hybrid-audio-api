@@ -175,6 +175,39 @@ def is_entry_contract_compatible(entry: Dict[str, Any]) -> bool:
 
     return compatible
 
+# ────────────────────────────────────────────────
+# 📁 Stem Category + Path Resolver
+# ────────────────────────────────────────────────
+
+def resolve_stem_storage(label: str) -> Path:
+    """
+    Determine the correct storage path for a stem based on its label.
+    Uses naming_contract.infer_stem_category + naming_contract.build_stem_path.
+    Fully additive: does not affect existing flat-cache behavior unless adopted
+    by callers (e.g., register_stem).
+    """
+    from naming_contract import infer_stem_category, build_stem_path
+
+    category = infer_stem_category(label)
+    stem_path = build_stem_path(category, label)
+
+    # Ensure folder exists
+    stem_path.parent.mkdir(parents=True, exist_ok=True)
+    return stem_path
+
+
+def add_category_to_entry(entry: Dict[str, Any], label: str) -> Dict[str, Any]:
+    """
+    Adds:
+        entry["category"] = inferred category
+    without altering any existing keys.
+    NDF-SAFE: If category already exists, it is preserved.
+    """
+    from naming_contract import infer_stem_category
+
+    if "category" not in entry:
+        entry["category"] = infer_stem_category(label)
+    return entry
 
 # ────────────────────────────────────────────────
 # 🧱 register_stem (extended for v5.0, NDF-safe)

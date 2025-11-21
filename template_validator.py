@@ -58,6 +58,35 @@ def validate_segments(template: Dict[str, Any]) -> None:
                 raise TemplateContractError(f"{field} for {seg_id} cannot be negative")
 
 
+# -------------------------------------------------------------------------
+# v5.2 — Script Segment Validator (additive, NDF-safe)
+# -------------------------------------------------------------------------
+
+_SCRIPT_ID_RE = re.compile(r"^(stem\.script\.|script\.)([a-z0-9_]+)$")
+
+def validate_script_segments(template: Dict[str, Any]) -> None:
+    """
+    Additive validator:
+        • Allows segment IDs of the form:
+              stem.script.<slug>
+              script.<slug>
+        • Never rejects legacy segment IDs (intro, outro, static_x)
+        • Ensures script segments include non-empty text
+    """
+    for seg in template.get("segments", []):
+        seg_id = seg.get("id", "")
+
+        # Only script-labelled segments get validated here
+        if _SCRIPT_ID_RE.match(seg_id):
+            text = seg.get("text", "")
+            if not text.strip():
+                raise TemplateContractError(
+                    f"Script segment '{seg_id}' requires non-empty text"
+                )
+        # Others are validated by validate_segments()
+        continue
+
+
 def validate_placeholders(template: Dict[str, Any]) -> None:
     declared = set(template.get("placeholders", []))
     found: Set[str] = set()
@@ -151,6 +180,10 @@ def validate_template_full(template: Dict[str, Any]) -> None:
     # Base validation
     validate_template_structure(template)
     validate_segments(template)
+
+    # NEW — Activate script segment validation (v5.2)
+    validate_script_segments(template)
+
     validate_placeholders(template)
     validate_no_ssml(template)
     validate_timing(template)
@@ -228,6 +261,7 @@ def validate_template_full(template: Dict[str, Any]) -> None:
 __all__ = [
     "validate_template_structure",
     "validate_segments",
+    "validate_script_segments",
     "validate_placeholders",
     "validate_no_ssml",
     "validate_timing",

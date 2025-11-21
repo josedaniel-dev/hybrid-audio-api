@@ -39,7 +39,9 @@ DATA_DIR = BASE_DIR / "data"
 for _d in (STEMS_DIR, OUTPUT_DIR, LOGS_DIR, TEMPLATE_DIR, DATA_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
-# Structured stems (name/developer) — NDF v3.9
+# Structured stems (script) — NDF v5.2
+STEMS_SCRIPT_DIR = STEMS_DIR / "script"
+STEMS_SCRIPT_DIR.mkdir(exist_ok=True, parents=True)
 STEMS_NAME_DIR = STEMS_DIR / "name"
 STEMS_DEVELOPER_DIR = STEMS_DIR / "developer"
 STEMS_NAME_DIR.mkdir(exist_ok=True, parents=True)
@@ -62,7 +64,7 @@ SAFE_GAIN_DB = float(os.getenv("SAFE_GAIN_DB", -1.0))
 IN_MEMORY_ASSEMBLY = os.getenv("IN_MEMORY_ASSEMBLY", "false").lower() == "true"
 ENABLE_SEMANTIC_TIMING = os.getenv("ENABLE_SEMANTIC_TIMING", "true").lower() == "true"
 
-DEFAULT_TEMPLATE = os.getenv("DEFAULT_TEMPLATE", "double_anchor_hybrid_v3_6.json")
+DEFAULT_TEMPLATE = os.getenv("DEFAULT_TEMPLATE", "double_anchor_hybrid.json")
 
 DISABLE_NORMALIZATION = os.getenv("DISABLE_NORMALIZATION", "true").lower() == "true"
 DISABLE_RESAMPLING = os.getenv("DISABLE_RESAMPLING", "true").lower() == "true"
@@ -118,6 +120,10 @@ LOG_FILE = LOGS_DIR / "hybrid_audio.log"
 
 GCS_BUCKET = os.getenv("GCS_BUCKET", "")
 GCS_FOLDER_STEMS = os.getenv("GCS_FOLDER_STEMS", "stems")
+# Structured GCS subfolders (name/developer/script)
+GCS_FOLDER_STEMS_NAME = os.getenv("GCS_FOLDER_STEMS_NAME", "stems/name")
+GCS_FOLDER_STEMS_DEVELOPER = os.getenv("GCS_FOLDER_STEMS_DEVELOPER", "stems/developer")
+GCS_FOLDER_STEMS_SCRIPT = os.getenv("GCS_FOLDER_STEMS_SCRIPT", "stems/script")
 GCS_FOLDER_OUTPUTS = os.getenv("GCS_FOLDER_OUTPUTS", "outputs")
 PUBLIC_ACCESS = os.getenv("PUBLIC_ACCESS", "true").lower() == "true"
 
@@ -189,6 +195,10 @@ def _norm_label(text: str) -> str:
 def stem_label_name(name: str) -> str:
     """v5.0 canonical name label: stem.name.<slug>"""
     return f"stem.name.{_norm_label(name)}"
+
+def stem_label_script(segment: str) -> str:
+    """v5.2 canonical script label: stem.script.<slug>"""
+    return f"stem.script.{_norm_label(segment)}"
 
 
 def stem_label_developer(developer: str) -> str:
@@ -293,6 +303,24 @@ def summarize_config() -> Dict[str, Any]:
         "gcs_enabled": is_gcs_enabled(),
     }
 
+def resolve_structured_stem_path(label: str) -> Path:
+    """
+    NEW v5.2 — Map canonical labels to structured subdirectories.
+    stem.name.jose      → stems/name/stem.name.jose.wav
+    stem.developer....  → stems/developer/<file>
+    stem.script....     → stems/script/<file>
+    fallback            → stems/<file>
+    """
+    lower = label.lower()
+
+    if lower.startswith("stem.name."):
+        return STEMS_NAME_DIR / f"{label}.wav"
+    if lower.startswith("stem.developer."):
+        return STEMS_DEVELOPER_DIR / f"{label}.wav"
+    if lower.startswith("stem.script."):
+        return STEMS_SCRIPT_DIR / f"{label}.wav"
+
+    return STEMS_DIR / f"{label}.wav"
 
 if __name__ == "__main__":
     print("🔧 Config Loaded:")

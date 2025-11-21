@@ -84,6 +84,77 @@ def validate_stem_kind(kind: str) -> None:
     if kind not in allowed:
         raise ValueError(f"Invalid stem kind '{kind}'. Allowed: {', '.join(sorted(allowed))}")
 
+# -------------------------------------------------
+# Category + Path Helpers (NDF-SAFE, additive only)
+# -------------------------------------------------
+
+def infer_stem_category(label: str) -> str:
+    """
+    Infer the logical stem category based on the stem label.
+    This does NOT alter existing naming logic — it only
+    classifies the stem into folders for organization.
+    """
+    lbl = label.lower()
+
+    if lbl.startswith("stem.name."):
+        return "name"
+    if lbl.startswith("stem.developer."):
+        return "developer"
+    if lbl.startswith("stem.script."):
+        return "script"          # NEW CATEGORY
+    if lbl.startswith("stem.generic."):
+        return "generic"         # Legacy compatibility
+    if lbl.startswith("segment."):
+        return "segment"
+    if lbl.startswith("silence."):
+        return "silence"
+
+    # fallback for unknown future cases
+    return "misc"
+
+
+def build_stem_path(category: str, label: str) -> Path:
+    """
+    Construct the canonical filesystem path for a stem,
+    preserving existing naming conventions.
+    Folder structure (local + GCS):
+        stems/<category>/<stem-label>.wav
+    Non-destructive: does not modify previous stem logic,
+    only extends directory organization.
+    """
+    # Lazy import to avoid circular dependency
+    from config import STEMS_DIR
+
+    safe_category = slugify(category)
+    stem_filename = f"{label}.wav"
+
+    return Path(STEMS_DIR) / safe_category / stem_filename
+
+# -------------------------------------------------
+# Stem Filename Builders (v5.2 extended, additive)
+# -------------------------------------------------
+
+def build_canonical_stem_filename(label: str) -> str:
+    """
+    v5.2 — Build filename <label>.wav without altering the label.
+    Example:
+        stem.name.jose → stem.name.jose.wav
+        stem.script.intro → stem.script.intro.wav
+    This is used by structured folders and GCS consistency.
+    """
+    return f"{label}.wav"
+
+
+def canonicalize_label(label: str) -> str:
+    """
+    v5.2 — Normalize label into canonical slug form but without
+    changing the stem.* prefix.
+    """
+    label = label.strip()
+    if "." not in label:
+        return slugify(label)
+    prefix, suffix = label.split(".", 1)
+    return f"{prefix}.{slugify(suffix)}"
 
 # -------------------------------------------------
 # Exported symbols
@@ -97,4 +168,9 @@ __all__ = [
     "build_segment_filename",
     "parse_stem_filename",
     "validate_stem_kind",
+    # v5.2 structured helpers
+    "infer_stem_category",
+    "build_stem_path",
+    "build_canonical_stem_filename",
+    "canonicalize_label",
 ]

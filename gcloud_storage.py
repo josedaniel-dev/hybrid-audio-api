@@ -109,10 +109,35 @@ def generate_signed_url(blob, expiration_seconds: int = 86400) -> Optional[str]:
 def resolve_gcs_blob_name(local_path: str, folder: Optional[str] = None) -> str:
     """
     Securely maps a local path -> GCS blob path.
-    Enforced:
-        • sanitized filename
-        • sanitized folder
+
+    v5.3 NDF Additive Upgrade:
+    -----------------------------------
+    • If the file lives under a structured stems directory:
+         stems/name/<NAME>/file.wav
+         stems/developer/<DEV>/file.wav
+         stems/script/<SCRIPT>/file.wav
+      → Preserve the entire relative path in GCS.
+
+    • Else: fallback to classic behavior:
+         <folder>/<filename>
+
+    • Always sanitize both folder and filename.
     """
+    p = Path(local_path)
+
+    # Detect if inside our structured stems hierarchy
+    try:
+        parts = p.parts
+        # Find "stems" in the path
+        if "stems" in parts:
+            idx = parts.index("stems")
+            relative = Path(*parts[idx:])  # stems/.../*.wav
+            clean = _sanitize_folder(str(relative))
+            return clean
+    except Exception:
+        pass
+
+    # Classic fallback mode (legacy-compatible)
     filename = _sanitize_filename(local_path)
     folder = _sanitize_folder(folder) if folder else ""
     return f"{folder}/{filename}" if folder else filename
@@ -235,3 +260,43 @@ def gcs_healthcheck() -> Dict[str, Any]:
             "error": str(e),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
+# ───────────────────────────────────────────────────────────────
+# v5.3 NDF — Minimal compatibility wrappers for tests + API
+#    These functions are EXPECTED by:
+#       - rotation.py  (/rotation/check_bucket)
+#       - cache.py     (/cache/check_in_bucket)
+#       - test_gcs_check_in_bucket.py
+#    Additive-only: they DO NOT alter existing logic.
+# ───────────────────────────────────────────────────────────────
+
+def gcs_check_file_exists(blob_path: str) -> bool:
+    """
+    Minimal existence checker for internal + test use.
+
+    Returns:
+        True  → blob exists in GCS bucket
+        False → missing OR GCS disabled OR SDK unavailable
+
+    Fully NDF-safe and never raises.
+    """
+    try:
+        client = init_gcs_client()
+        if not client or not is_gcs_enabled() or not GCS_BUCKET:
+            return False
+
+        bucket = client.bucket(GCS_BUCKET)
+        blob = bucket.blob(blob_path)
+        return blob.exists()
+    except Exception:
+        return False
+
+
+def gcs_resolve_uri(blob_path: str) -> str:
+    """
+    Build a public-style GCS URL for a blob.
+    This is used by rotation.py + cache.py.
+    """
+    try:
+        return f"{URL_BASE_GCS}/{blob_path}"
+    except Exception:
+        return blob_path
