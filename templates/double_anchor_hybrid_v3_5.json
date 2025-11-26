@@ -1,0 +1,133 @@
+{
+  "_version_comment": "double_anchor_hybrid_v4.0 — Sonic-3 aligned, NDF-safe",
+  "template_name": "double_anchor_hybrid",
+  "version": "v4.0 NDF — Sonic3-Aligned",
+  "description": "Double-anchor hybrid refined pacing — calm tone, normalized speed 1.0. Fully aligned with Sonic-3 contract and deterministic stem naming.",
+  "voice_config": {
+    "speed": 1.0,
+    "volume": 1.0,
+    "tone": "calm"
+  },
+  "segments": [
+    {
+      "id": "stem.name.intro",
+      "text": "Hey {name}, it's Luis.",
+      "gap_ms": 120,
+      "crossfade_ms": 20,
+      "break_ms": 400,
+      "estimated_duration_ms": 2200,
+      "generation_config": {
+        "speed": 1.0,
+        "volume": 1.0
+      },
+      "output_format": {
+        "container": "wav",
+        "encoding": "pcm_s16le",
+        "sample_rate": 48000
+      },
+      "model_id": "sonic-3"
+    },
+    {
+      "id": "stem.generic.followup",
+      "text": "I just wanted to follow up, about your",
+      "gap_ms": 90,
+      "crossfade_ms": 20,
+      "break_ms": 250,
+      "estimated_duration_ms": 1800,
+      "generation_config": {
+        "speed": 1.0,
+        "volume": 1.0
+      },
+      "output_format": {
+        "container": "wav",
+        "encoding": "pcm_s16le",
+        "sample_rate": 48000
+      },
+      "model_id": "sonic-3"
+    },
+    {
+      "id": "stem.developer.main",
+      "text": "{developer} timeshare.",
+      "gap_ms": 100,
+      "crossfade_ms": 25,
+      "break_ms": 400,
+      "estimated_duration_ms": 1900,
+      "generation_config": {
+        "speed": 1.0,
+        "volume": 1.0
+      },
+      "output_format": {
+        "container": "wav",
+        "encoding": "pcm_s16le",
+        "sample_rate": 48000
+      },
+      "model_id": "sonic-3"
+    },
+    {
+      "id": "stem.generic.closing",
+      "text": "I think a colleague may have reached out to you before. But I wanted to make sure everything is handled. Thank you.",
+      "gap_ms": 120,
+      "crossfade_ms": 25,
+      "break_ms": 600,
+      "estimated_duration_ms": 4800,
+      "generation_config": {
+        "speed": 1.0,
+        "volume": 1.0
+      },
+      "output_format": {
+        "container": "wav",
+        "encoding": "pcm_s16le",
+        "sample_rate": 48000
+      },
+      "model_id": "sonic-3"
+    }
+  ],
+  "timing_map": [
+    {
+      "from": "stem.name.intro",
+      "to": "stem.generic.followup",
+      "gap_ms": 120,
+      "crossfade_ms": 20
+    },
+    {
+      "from": "stem.generic.followup",
+      "to": "stem.developer.main",
+      "gap_ms": 90,
+      "crossfade_ms": 20
+    },
+    {
+      "from": "stem.developer.main",
+      "to": "stem.generic.closing",
+      "gap_ms": 120,
+      "crossfade_ms": 25
+    }
+  ],
+  "variants": {
+    "fast_assertive": {
+      "description": "Same structure, slightly accelerated for confident tone.",
+      "voice_config": {
+        "speed": 1.05,
+        "volume": 1.05,
+        "tone": "assertive"
+      }
+    },
+    "soft_warm": {
+      "description": "Softer delivery with warmer tone.",
+      "voice_config": {
+        "speed": 0.88,
+        "volume": 0.9,
+        "tone": "warm"
+      }
+    }
+  },
+  "metadata": {
+    "author": "José Soto",
+    "engine": "Cartesia Sonic-3",
+    "merge_method": "bitmerge_semantic",
+    "template_family": "double_anchor_hybrid",
+    "last_updated": "2025-11-17T00:00:00Z",
+    "ndf_compliance": true,
+    "estimated_total_duration_ms": 10700,
+    "ndf_notes": "Updated for Sonic-3 contract. Segment IDs aligned with stem.name.* and stem.developer.* conventions."
+  }
+}

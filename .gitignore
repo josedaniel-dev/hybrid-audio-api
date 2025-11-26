@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────
+# Python / Virtual Environment
+# ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.so
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# ─────────────────────────────────────────────
+# OS / General
+# ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.temp
+
+# ─────────────────────────────────────────────
+# IDE / Editors
+# ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ─────────────────────────────────────────────
+# Project Folders (local-only artifacts)
+# ─────────────────────────────────────────────
+stems/
+output/
+logs/
+
+# Important: we DO NOT ignore /data because it contains datasets + stems_index.json
+data/*.tmp
+data/cache_backup/
+
+# ─────────────────────────────────────────────
+# SECURITY / CREDENTIALS (FULL LOCKDOWN)
+# ─────────────────────────────────────────────
+# Entire credentials directory MUST NEVER be versioned
+credentials/
+credentials/**
+
+# Explicit file-level ignores (defense in depth)
+.env
+*.key
+*.pem
+*.crt
+*.cer
+*.der
+*.pfx
+*.p12
+*.json
+service-account.json
+gcloud_credentials.json
+
+# But DO NOT ignore json in templates/
+!templates/*.json
+
+
+# ─────────────────────────────────────────────
+# Audio / Media
+# ─────────────────────────────────────────────
+*.wav
+*.mp3
+*.flac
+
+# ─────────────────────────────────────────────
+# Build / Distribution
+# ─────────────────────────────────────────────
+dist/
+build/
+*.tar.gz
+*.whl
+
+# ─────────────────────────────────────────────
+# Coverage / Testing
+# ─────────────────────────────────────────────
+.coverage
+coverage.xml
+htmlcov/
+
+# ─────────────────────────────────────────────
+# Node / UI (future-proof)
+# ─────────────────────────────────────────────
+node_modules/
