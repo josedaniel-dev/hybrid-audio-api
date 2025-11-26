@@ -1,8 +1,3 @@
-Perfecto.
-Aquí tienes el **README.md profesional, limpio, versión A**, totalmente coherente con Hybrid Audio API v5.3, sin extras, sin adornos, sin menciones innecesarias.
-
----
-
 # Hybrid Audio API — v5.3 (Sonic-3 Edition)
 
 Microservicio modular para generación, ensamblaje y administración de audio personalizado usando **Cartesia Sonic-3**, con énfasis en reproducibilidad, contratos técnicos estrictos y escalabilidad.
@@ -327,3 +322,4 @@ Genera:
 MIT License.
 
 Desarrollado por **José Daniel Soto**.
+
